@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<title>index.html</title>
+<title>死角を狙え！シカ侍ゲーム</title>
 <style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;padding:0;background:#111;font-family:system-ui,-apple-system,"Noto Sans JP",sans-serif;touch-action:manipulation}
@@ -142,16 +142,20 @@ const deadZones=[
   {x:655,y:500,w:425,h:820},
   {x:385,y:1315,w:310,h:125}
 ];
-let baseCanvas=null,baseCtx=null;
+let baseCanvas=null,baseCtx=null,basePixels=null;
 
 function prepareBaseMap(){
-  if(baseCanvas)return;
+  if(basePixels)return;
   const img=document.getElementById("base");
   if(!img.complete || !img.naturalWidth)return;
-  baseCanvas=document.createElement("canvas");
-  baseCanvas.width=BASE_W;baseCanvas.height=BASE_H;
-  baseCtx=baseCanvas.getContext("2d",{willReadFrequently:true});
-  baseCtx.drawImage(img,0,0,BASE_W,BASE_H);
+  if(!baseCanvas){
+    baseCanvas=document.createElement("canvas");
+    baseCanvas.width=BASE_W;baseCanvas.height=BASE_H;
+    baseCtx=baseCanvas.getContext("2d",{willReadFrequently:true});
+    baseCtx.drawImage(img,0,0,BASE_W,BASE_H);
+  }
+  // 画像全体の画素を一度だけ取得。スマホで1pxずつgetImageDataする負荷を避ける。
+  basePixels=baseCtx.getImageData(0,0,BASE_W,BASE_H).data;
 }
 
 function nearColor(r,g,b,c,tol=18){
@@ -163,17 +167,17 @@ function nearColor(r,g,b,c,tol=18){
 // 少しでも重なる候補は採用しない。
 function fitsZone(x,y,zoneColor){
   prepareBaseMap();
-  if(!baseCtx)return false;
+  if(!basePixels)return false;
   const size=BASE_W*0.12;
   const sx=x*BASE_W/100, sy=y*BASE_H/100;
   if(sx<0||sy<0||sx+size>BASE_W||sy+size>BASE_H)return false;
   const n=9;
   for(let gy=0;gy<n;gy++){
     for(let gx=0;gx<n;gx++){
-      const px=Math.round(sx+(gx+0.5)*size/n);
-      const py=Math.round(sy+(gy+0.5)*size/n);
-      const d=baseCtx.getImageData(px,py,1,1).data;
-      if(!nearColor(d[0],d[1],d[2],zoneColor))return false;
+      const px=Math.max(0,Math.min(BASE_W-1,Math.round(sx+(gx+0.5)*size/n)));
+      const py=Math.max(0,Math.min(BASE_H-1,Math.round(sy+(gy+0.5)*size/n)));
+      const i=(py*BASE_W+px)*4;
+      if(!nearColor(basePixels[i],basePixels[i+1],basePixels[i+2],zoneColor))return false;
     }
   }
   return true;
@@ -209,6 +213,11 @@ function showTarget(){
   if(!running)return;
   hideTarget();
   prepareBaseMap();
+  // BASE画像の解析が終わる前に大量探索しない。
+  if(!basePixels){
+    spawnTimer=setTimeout(showTarget,100);
+    return;
+  }
 
   const outside=false;
   const pos=randomInDeadZone();
@@ -352,14 +361,42 @@ function handleTargetTap(el,e){
   hideTarget();
 }
 
+// スマホ対応：表示画像はCSSで2倍表示されるため、
+// ボタン本体(12%)だけでなく、実際に見えている画像全体を当たり判定にする。
+function pointHitsCurrentTarget(clientX,clientY){
+  if(!current)return false;
+  const img=current.querySelector("img");
+  const r=(img||current).getBoundingClientRect();
+  return clientX>=r.left && clientX<=r.right && clientY>=r.top && clientY<=r.bottom;
+}
+
+function handleGamePointer(e){
+  if(!running || !current)return;
+  if(pointHitsCurrentTarget(e.clientX,e.clientY)){
+    e.preventDefault();
+    handleTargetTap(current,e);
+  }
+}
+
+const gameEl=document.getElementById("game");
+if(window.PointerEvent){
+  gameEl.addEventListener("pointerdown",handleGamePointer,{passive:false});
+}else{
+  // 古いSafari向けフォールバック
+  gameEl.addEventListener("touchstart",e=>{
+    const t=e.touches&&e.touches[0];
+    if(!t || !running || !current)return;
+    if(pointHitsCurrentTarget(t.clientX,t.clientY)){
+      e.preventDefault();
+      handleTargetTap(current,e);
+    }
+  },{passive:false});
+  gameEl.addEventListener("mousedown",handleGamePointer);
+}
+
+// キーボード／通常クリックのフォールバック
 targets.forEach(el=>{
   el.addEventListener("click",e=>handleTargetTap(el,e));
-  el.addEventListener("touchstart",e=>e.preventDefault(),{passive:false});
-});
-
-document.getElementById("game").addEventListener("click",e=>{
-  const el=e.target.closest(".outside-target");
-  if(el)handleTargetTap(el,e);
 });
 
 document.getElementById("base").addEventListener("load",prepareBaseMap);
